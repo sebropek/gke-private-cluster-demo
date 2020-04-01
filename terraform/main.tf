@@ -38,6 +38,22 @@ limitations under the License.
 //}
 
 // Enable required services on the project
+
+
+resource "google_project_iam_policy" "project" {
+  project     = var.project
+  policy_data = data.google_iam_policy.admin.policy_data
+}
+
+data "google_iam_policy" "admin" {
+  binding {
+    role = "${element(values(var.iam_roles), count.index)}"
+
+    members = [
+      "user:sebropek@gmail.com",
+    ]
+  }
+}
 resource "google_project_service" "service" {
   count   = length(var.project_services)
   project = var.project
