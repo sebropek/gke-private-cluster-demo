@@ -158,6 +158,7 @@ resource "google_container_node_pool" "private-np-1" {
       google-compute-enable-virtio-rng = "true"
       // Explicitly remove GCE legacy metadata API endpoint
       disable-legacy-endpoints = "true"
+      enable-oslogin = "true"
     }
   }
 
