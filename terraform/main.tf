@@ -170,6 +170,38 @@ resource "google_compute_firewall" "bastion-ssh" {
   target_tags = ["bastion"]
 }
 
+
+resource "google_compute_firewall" "internal-ssh-iap" {
+  name          = format("%s-internal-ssh-iap", var.cluster_name)
+  network       = google_compute_network.network.name
+  direction     = "INGRESS"
+  project       = var.project
+  source_ranges = ["35.235.240.0/20"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  target_tags = ["internal"]
+}
+
+resource "google_compute_firewall" "internal-ssh-bastion" {
+  name          = format("%s-internal-ssh-bastion", var.cluster_name)
+  network       = google_compute_network.network.name
+  direction     = "INGRESS"
+  project       = var.project
+  source_tags = ["bastion"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  target_tags = ["internal"]
+}
+
+
 // The user-data script on Bastion instance provisioning
 data "template_file" "startup_script" {
   template = <<-EOF
@@ -182,7 +214,7 @@ data "template_file" "startup_script" {
 // The Bastion Host
 resource "google_compute_instance" "bastion" {
   name = local.hostname
-  machine_type = "g1-small"
+  machine_type = "f1-micro"
   zone = format("%s-a", var.region)
   project = var.project
   tags = ["bastion"]
@@ -243,7 +275,7 @@ EOF
 
 resource "google_compute_instance" "internal" {
   name = "internal"
-  machine_type = "g1-small"
+  machine_type = "f1-micro"
   zone = format("%s-a", var.region)
   project = var.project
   tags = ["internal"]
