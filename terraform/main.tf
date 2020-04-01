@@ -100,8 +100,8 @@ resource "google_container_cluster" "cluster" {
 
   depends_on = [
     "google_project_service.service",
-    "google_project_iam_member.service-account",
-    "google_project_iam_member.service-account-custom",
+    //"google_project_iam_member.service-account",
+//    "google_project_iam_member.service-account-custom",
     "google_compute_router_nat.nat",
   ]
 
@@ -132,7 +132,7 @@ resource "google_container_node_pool" "private-np-1" {
     image_type   = "COS"
 
     // Use the cluster created service account for this node pool
-    service_account = google_service_account.gke-sa.email
+//    service_account = google_service_account.gke-sa.email
 
     // Use the minimal oauth scopes needed
     oauth_scopes = [

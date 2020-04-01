@@ -22,20 +22,20 @@ resource "google_service_account" "gke-sa" {
 }
 
 // Add the service account to the project
-resource "google_project_iam_member" "service-account" {
-  count   = length(var.service_account_iam_roles)
-  project = var.project
-  role    = element(var.service_account_iam_roles, count.index)
-  member  = format("serviceAccount:%s", google_service_account.gke-sa.email)
-}
+//resource "google_project_iam_member" "service-account" {
+//  count   = length(var.service_account_iam_roles)
+//  project = var.project
+//  role    = element(var.service_account_iam_roles, count.index)
+//  member  = format("serviceAccount:%s", google_service_account.gke-sa.email)
+//}
 
 // Add user-specified roles
-resource "google_project_iam_member" "service-account-custom" {
-  count   = length(var.service_account_custom_iam_roles)
-  project = var.project
-  role    = element(var.service_account_custom_iam_roles, count.index)
-  member  = format("serviceAccount:%s", google_service_account.gke-sa.email)
-}
+//resource "google_project_iam_member" "service-account-custom" {
+//  count   = length(var.service_account_custom_iam_roles)
+//  project = var.project
+//  role    = element(var.service_account_custom_iam_roles, count.index)
+//  member  = format("serviceAccount:%s", google_service_account.gke-sa.email)
+//}
 
 // Enable required services on the project
 resource "google_project_service" "service" {
