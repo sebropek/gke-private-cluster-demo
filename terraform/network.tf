@@ -15,11 +15,11 @@ limitations under the License.
 */
 
 // Create the GKE service account
-resource "google_service_account" "gke-sa" {
-  account_id   = format("%s-node-sa", var.cluster_name)
-  display_name = "GKE Security Service Account"
-  project      = var.project
-}
+//resource "google_service_account" "gke-sa" {
+//  account_id   = format("%s-node-sa", var.cluster_name)
+///  display_name = "GKE Security Service Account"
+//  project      = var.project
+//}
 
 // Add the service account to the project
 //resource "google_project_iam_member" "service-account" {
@@ -221,5 +221,42 @@ resource "google_compute_instance" "bastion" {
           exit 1
         fi
 EOF
+  }
+}
+
+
+resource "google_compute_instance" "internal" {
+  name = local.hostname
+  machine_type = "g1-small"
+  zone = format("%s-a", var.region)
+  project = var.project
+  tags = ["bastion"]
+
+  // Specify the Operating System Family and version.
+  boot_disk {
+    initialize_params {
+      image = "debian-cloud/debian-9"
+    }
+  }
+
+  // Ensure that when the bastion host is booted, it will have tinyproxy
+//  metadata_startup_script = data.template_file.startup_script.rendered
+
+  // Define a network interface in the correct subnet.
+  network_interface {
+    subnetwork = google_compute_subnetwork.subnetwork.name
+
+    // Add an ephemeral external IP.
+  //  access_config {
+      // Ephemeral IP
+   // }
+  }
+
+  // Allow the instance to be stopped by terraform when updating configuration
+  allow_stopping_for_update = true
+
+  service_account {
+    email = google_service_account.bastion.email
+    scopes = ["cloud-platform"]
   }
 }
