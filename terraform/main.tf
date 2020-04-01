@@ -14,155 +14,249 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-resource "google_container_cluster" "cluster" {
-  provider = "google-beta"
+// Create the GKE service account
+//resource "google_service_account" "gke-sa" {
+//  account_id   = format("%s-node-sa", var.cluster_name)
+///  display_name = "GKE Security Service Account"
+//  project      = var.project
+//}
 
-  name     = var.cluster_name
-  project  = var.project
-  location = var.region
+// Add the service account to the project
+//resource "google_project_iam_member" "service-account" {
+//  count   = length(var.service_account_iam_roles)
+//  project = var.project
+//  role    = element(var.service_account_iam_roles, count.index)
+//  member  = format("serviceAccount:%s", google_service_account.gke-sa.email)
+//}
 
-  network    = google_compute_network.network.self_link
-  subnetwork = google_compute_subnetwork.subnetwork.self_link
+// Add user-specified roles
+//resource "google_project_iam_member" "service-account-custom" {
+//  count   = length(var.service_account_custom_iam_roles)
+//  project = var.project
+//  role    = element(var.service_account_custom_iam_roles, count.index)
+//  member  = format("serviceAccount:%s", google_service_account.gke-sa.email)
+//}
 
-  logging_service    = "logging.googleapis.com/kubernetes"
-  monitoring_service = "monitoring.googleapis.com/kubernetes"
+// Enable required services on the project
+resource "google_project_service" "service" {
+  count   = length(var.project_services)
+  project = var.project
+  service = element(var.project_services, count.index)
 
-  // Decouple the default node pool lifecycle from the cluster object lifecycle
-  // by removing the node pool and specifying a dedicated node pool in a
-  // separate resource below.
-  remove_default_node_pool = "true"
-  initial_node_count       = 1
+  // Do not disable the service on destroy. On destroy, we are going to
+  // destroy the project, but we need the APIs available to destroy the
+  // underlying resources.
+  disable_on_destroy = false
+}
 
-  // Configure various addons
-  addons_config {
-    // Disable the Kubernetes dashboard, which is often an attack vector. The
-    // cluster can still be managed via the GKE UI.
-    kubernetes_dashboard {
-      disabled = true
-    }
-
-    // Enable network policy (Calico)
-    network_policy_config {
-      disabled = false
-    }
-  }
-
-  // Enable workload identity
-  workload_identity_config {
-    identity_namespace = format("%s.svc.id.goog", var.project)
-  }
-
-  // Disable basic authentication and cert-based authentication.
-  // Empty fields for username and password are how to "disable" the
-  // credentials from being generated.
-  master_auth {
-    username = ""
-    password = ""
-
-    client_certificate_config {
-      issue_client_certificate = "false"
-    }
-  }
-
-  // Enable network policy configurations (like Calico) - for some reason this
-  // has to be in here twice.
-  network_policy {
-    enabled = "true"
-  }
-
-  // Allocate IPs in our subnetwork
-  ip_allocation_policy {
-    use_ip_aliases                = true
-    cluster_secondary_range_name  = google_compute_subnetwork.subnetwork.secondary_ip_range.0.range_name
-    services_secondary_range_name = google_compute_subnetwork.subnetwork.secondary_ip_range.1.range_name
-  }
-
-  // Specify the list of CIDRs which can access the master's API
-  master_authorized_networks_config {
-    cidr_blocks {
-      display_name = "bastion"
-      cidr_block   = format("%s/32", google_compute_instance.bastion.network_interface.0.network_ip)
-    }
-  }
-  // Configure the cluster to have private nodes and private control plane access only
-  private_cluster_config {
-    enable_private_endpoint = "true"
-    enable_private_nodes    = "true"
-    master_ipv4_cidr_block  = "172.16.0.16/28"
-  }
-
-  // Allow plenty of time for each operation to finish (default was 10m)
-  timeouts {
-    create = "30m"
-    update = "30m"
-    delete = "30m"
-  }
+// Create a network for GKE
+resource "google_compute_network" "network" {
+  name                    = format("%s-network", var.cluster_name)
+  project                 = var.project
+  auto_create_subnetworks = false
 
   depends_on = [
     "google_project_service.service",
-    //"google_project_iam_member.service-account",
-//    "google_project_iam_member.service-account-custom",
-    "google_compute_router_nat.nat",
   ]
+}
+
+// Create subnets
+resource "google_compute_subnetwork" "subnetwork" {
+  name          = format("%s-subnet", var.cluster_name)
+  project       = var.project
+  network       = google_compute_network.network.self_link
+  region        = var.region
+  ip_cidr_range = "10.0.0.0/24"
+
+  private_ip_google_access = true
+
+  secondary_ip_range {
+    range_name    = format("%s-pod-range", var.cluster_name)
+    ip_cidr_range = "10.1.0.0/16"
+  }
+
+  secondary_ip_range {
+    range_name    = format("%s-svc-range", var.cluster_name)
+    ip_cidr_range = "10.2.0.0/20"
+  }
+}
+// Create an external NAT IP
+resource "google_compute_address" "nat" {
+  name    = format("%s-nat-ip", var.cluster_name)
+  project = var.project
+  region  = var.region
+
+  depends_on = [
+    "google_project_service.service",
+  ]
+}
+
+// Create a cloud router for use by the Cloud NAT
+resource "google_compute_router" "router" {
+  name    = format("%s-cloud-router", var.cluster_name)
+  project = var.project
+  region  = var.region
+  network = google_compute_network.network.self_link
+
+  bgp {
+    asn = 64514
+  }
+}
+
+// Create a NAT router so the nodes can reach DockerHub, etc
+resource "google_compute_router_nat" "nat" {
+  name    = format("%s-cloud-nat", var.cluster_name)
+  project = var.project
+  router  = google_compute_router.router.name
+  region  = var.region
+
+  nat_ip_allocate_option = "MANUAL_ONLY"
+
+  nat_ips = [google_compute_address.nat.self_link]
+
+  source_subnetwork_ip_ranges_to_nat = "LIST_OF_SUBNETWORKS"
+
+  subnetwork {
+    name                    = google_compute_subnetwork.subnetwork.self_link
+    source_ip_ranges_to_nat = ["PRIMARY_IP_RANGE", "LIST_OF_SECONDARY_IP_RANGES"]
+
+    secondary_ip_range_names = [
+      google_compute_subnetwork.subnetwork.secondary_ip_range.0.range_name,
+      google_compute_subnetwork.subnetwork.secondary_ip_range.1.range_name,
+    ]
+  }
+}
+
+// Bastion Host
+locals {
+  hostname = format("%s-bastion", var.cluster_name)
+}
+
+// Dedicated service account for the Bastion instance
+resource "google_service_account" "bastion" {
+  account_id   = format("%s-bastion-sa", var.cluster_name)
+  display_name = "GKE Bastion SA"
+}
+
+// Allow access to the Bastion Host via SSH
+resource "google_compute_firewall" "bastion-ssh" {
+  name          = format("%s-bastion-ssh", var.cluster_name)
+  network       = google_compute_network.network.name
+  direction     = "INGRESS"
+  project       = var.project
+  source_ranges = ["0.0.0.0/0"]
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  target_tags = ["bastion"]
+}
+
+// The user-data script on Bastion instance provisioning
+data "template_file" "startup_script" {
+  template = <<-EOF
+  sudo apt-get update -y
+  sudo apt-get install -y tinyproxy
+  EOF
 
 }
 
-// A dedicated/separate node pool where workloads will run.  A regional node pool
-// will have "node_count" nodes per zone, and will use 3 zones.  This node pool
-// will be 3 nodes in size and use a non-default service-account with minimal
-// Oauth scope permissions.
-resource "google_container_node_pool" "private-np-1" {
-  provider = "google-beta"
+// The Bastion Host
+resource "google_compute_instance" "bastion" {
+  name = local.hostname
+  machine_type = "g1-small"
+  zone = format("%s-a", var.region)
+  project = var.project
+  tags = ["bastion"]
 
-  name       = "private-np-1"
-  location   = var.region
-  cluster    = google_container_cluster.cluster.name
-  node_count = "1"
-
-  // Repair any issues but don't auto upgrade node versions
-  management {
-    auto_repair  = "true"
-    auto_upgrade = "false"
-  }
-
-  node_config {
-    machine_type = "n1-standard-2"
-    disk_type    = "pd-ssd"
-    disk_size_gb = 30
-    image_type   = "COS"
-
-    // Use the cluster created service account for this node pool
-//    service_account = google_service_account.gke-sa.email
-
-    // Use the minimal oauth scopes needed
-    oauth_scopes = [
-      "https://www.googleapis.com/auth/devstorage.read_only",
-      "https://www.googleapis.com/auth/logging.write",
-      "https://www.googleapis.com/auth/monitoring",
-      "https://www.googleapis.com/auth/servicecontrol",
-      "https://www.googleapis.com/auth/service.management.readonly",
-      "https://www.googleapis.com/auth/trace.append",
-    ]
-
-    labels = {
-      cluster = var.cluster_name
-    }
-
-    // Enable workload identity on this node pool
-    workload_metadata_config {
-      node_metadata = "GKE_METADATA_SERVER"
-    }
-
-    metadata = {
-      // Set metadata on the VM to supply more entropy
-      google-compute-enable-virtio-rng = "true"
-      // Explicitly remove GCE legacy metadata API endpoint
-      disable-legacy-endpoints = "true"
-      enable-oslogin = "true"
+  // Specify the Operating System Family and version.
+  boot_disk {
+    initialize_params {
+      image = "debian-cloud/debian-9"
     }
   }
 
-  depends_on = [
-    "google_container_cluster.cluster",
-  ]
+  // Ensure that when the bastion host is booted, it will have tinyproxy
+  metadata_startup_script = data.template_file.startup_script.rendered
+
+  // Define a network interface in the correct subnet.
+  network_interface {
+    subnetwork = google_compute_subnetwork.subnetwork.name
+
+    // Add an ephemeral external IP.
+    access_config {
+      // Ephemeral IP
+    }
+  }
+
+  // Allow the instance to be stopped by terraform when updating configuration
+  allow_stopping_for_update = true
+
+  service_account {
+    email = google_service_account.bastion.email
+    scopes = ["cloud-platform"]
+  }
+
+  // local-exec providers may run before the host has fully initialized. However, they
+  // are run sequentially in the order they were defined.
+  //
+  // This provider is used to block the subsequent providers until the instance
+  // is available.
+  provisioner "local-exec" {
+    command = <<EOF
+        READY=""
+        for i in $(seq 1 20); do
+          if gcloud compute ssh ${local.hostname} --project ${var.project} --zone ${var.region}-a --command uptime; then
+            READY="yes"
+            break;
+          fi
+          echo "Waiting for ${local.hostname} to initialize..."
+          sleep 10;
+        done
+        if [[ -z $READY ]]; then
+          echo "${local.hostname} failed to start in time."
+          echo "Please verify that the instance starts and then re-run `terraform apply`"
+          exit 1
+        fi
+EOF
+  }
+}
+
+
+resource "google_compute_instance" "internal" {
+  name = local.hostname
+  machine_type = "g1-small"
+  zone = format("%s-a", var.region)
+  project = var.project
+  tags = ["bastion"]
+
+  // Specify the Operating System Family and version.
+  boot_disk {
+    initialize_params {
+      image = "debian-cloud/debian-9"
+    }
+  }
+
+  // Ensure that when the bastion host is booted, it will have tinyproxy
+//  metadata_startup_script = data.template_file.startup_script.rendered
+
+  // Define a network interface in the correct subnet.
+  network_interface {
+    subnetwork = google_compute_subnetwork.subnetwork.name
+
+    // Add an ephemeral external IP.
+  //  access_config {
+      // Ephemeral IP
+   // }
+  }
+
+  // Allow the instance to be stopped by terraform when updating configuration
+  allow_stopping_for_update = true
+
+  service_account {
+    email = google_service_account.bastion.email
+    scopes = ["cloud-platform"]
+  }
 }
