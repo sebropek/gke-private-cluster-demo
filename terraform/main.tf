@@ -226,11 +226,11 @@ EOF
 
 
 resource "google_compute_instance" "internal" {
-  name = local.hostname
+  name = "internal"
   machine_type = "g1-small"
   zone = format("%s-a", var.region)
   project = var.project
-  tags = ["bastion"]
+  tags = ["internal"]
 
   // Specify the Operating System Family and version.
   boot_disk {
