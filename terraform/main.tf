@@ -54,6 +54,8 @@ data "google_iam_policy" "admin" {
     ]
   }
 }
+}
+
 resource "google_project_service" "service" {
   count   = length(var.project_services)
   project = var.project
